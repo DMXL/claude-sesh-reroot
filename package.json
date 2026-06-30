@@ -1,0 +1,38 @@
+{
+  "name": "claude-sesh-reroot",
+  "version": "0.1.0",
+  "description": "Re-home Claude Code sessions and project state when you move a project folder, so you can resume from the new location.",
+  "type": "module",
+  "bin": {
+    "claude-sesh-reroot": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cli",
+    "sessions",
+    "migrate"
+  ],
+  "author": "DMXL",
+  "license": "MIT",
+  "dependencies": {
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

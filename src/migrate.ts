@@ -1,0 +1,149 @@
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import { backupClaudeJson, backupProjectDir, timestamp } from "./backup.js";
+import { rekeyClaudeJson } from "./config.js";
+import { isInside } from "./files.js";
+import { enumerateProjects, findSourceProjectDir, projectDirFor } from "./locate.js";
+import { makeRewriter, rewriteTranscripts, type RewriteMode } from "./transcripts.js";
+
+export interface MigrateOptions {
+  inputDir: string;
+  outputDir: string;
+  /** "prefix" when files were relocated, "exact" for state-only. */
+  mode: RewriteMode;
+  dryRun: boolean;
+  backup: boolean;
+  rewrite: boolean;
+  force: boolean;
+  log: (msg: string) => void;
+}
+
+export interface MigrateSummary {
+  movedProjects: Array<{ from: string; to: string }>;
+  skippedCollisions: string[];
+  transcriptFiles: number;
+  transcriptLines: number;
+  rekeyed: string[];
+  repoPathsUpdated: number;
+}
+
+/** Move a project session dir, merging into an existing destination and reporting skipped collisions. */
+function moveProjectDir(src: string, dest: string, force: boolean): string[] {
+  if (!existsSync(dest)) {
+    mkdirSync(dirname(dest), { recursive: true });
+    try {
+      renameSync(src, dest);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        cpSync(src, dest, { recursive: true });
+        rmSync(src, { recursive: true, force: true });
+      } else {
+        throw err;
+      }
+    }
+    return [];
+  }
+
+  const skipped: string[] = [];
+  for (const entry of readdirSync(src)) {
+    const from = join(src, entry);
+    const to = join(dest, entry);
+    if (existsSync(to)) {
+      const isFile = statSync(from).isFile();
+      if (isFile && !force) {
+        skipped.push(entry);
+        continue;
+      }
+      rmSync(to, { recursive: true, force: true });
+    }
+    try {
+      renameSync(from, to);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        cpSync(from, to, { recursive: true });
+        rmSync(from, { recursive: true, force: true });
+      } else {
+        throw err;
+      }
+    }
+  }
+  if (readdirSync(src).length === 0) rmSync(src, { recursive: true, force: true });
+  return skipped;
+}
+
+/** Project session directories whose cwd is affected by the move. */
+function affectedProjects(inputDir: string, mode: RewriteMode): Array<{ dir: string; cwd: string }> {
+  const affected = new Map<string, string>();
+  for (const { dir, cwd } of enumerateProjects()) {
+    if (cwd === inputDir || (mode === "prefix" && isInside(cwd, inputDir))) affected.set(dir, cwd);
+  }
+  const exact = findSourceProjectDir(inputDir);
+  if (exact && !affected.has(exact)) affected.set(exact, inputDir);
+  return [...affected].map(([dir, cwd]) => ({ dir, cwd }));
+}
+
+/** Perform the Claude-state migration (project session dirs, transcripts, config re-keying). */
+export function migrateClaudeState(opts: MigrateOptions): MigrateSummary {
+  const { inputDir, outputDir, mode, dryRun, backup, rewrite, force, log } = opts;
+  const rewriter = makeRewriter(inputDir, outputDir, mode);
+  const summary: MigrateSummary = {
+    movedProjects: [],
+    skippedCollisions: [],
+    transcriptFiles: 0,
+    transcriptLines: 0,
+    rekeyed: [],
+    repoPathsUpdated: 0,
+  };
+
+  const projects = affectedProjects(inputDir, mode);
+  if (projects.length === 0) {
+    log(`No Claude project sessions found for ${inputDir}.`);
+  }
+
+  const ts = timestamp();
+  for (const { dir, cwd } of projects) {
+    const newCwd = rewriter(cwd);
+    if (newCwd === cwd) continue;
+    const dest = projectDirFor(newCwd);
+    summary.movedProjects.push({ from: dir, to: dest });
+    log(`project sessions: ${dir} -> ${dest}`);
+
+    if (dryRun) continue;
+
+    if (backup) {
+      const bak = backupProjectDir(dir, ts);
+      log(`  backed up to ${bak}`);
+    }
+    const skipped = moveProjectDir(dir, dest, force);
+    for (const s of skipped) {
+      summary.skippedCollisions.push(`${dest}/${s}`);
+      log(`  WARNING: skipped existing ${s} (use --force to overwrite)`);
+    }
+    if (rewrite) {
+      const r = rewriteTranscripts(dest, inputDir, outputDir, mode);
+      summary.transcriptFiles += r.files;
+      summary.transcriptLines += r.changedLines;
+      if (r.files > 0) log(`  rewrote paths in ${r.files} transcript file(s), ${r.changedLines} line(s)`);
+    }
+  }
+
+  if (backup && !dryRun) {
+    const bak = backupClaudeJson(ts);
+    if (bak) log(`~/.claude.json backed up to ${bak}`);
+  }
+  const cfg = rekeyClaudeJson(rewriter, dryRun);
+  summary.rekeyed = cfg.rekeyed;
+  summary.repoPathsUpdated = cfg.repoPathsUpdated;
+  for (const r of cfg.rekeyed) log(`~/.claude.json projects: ${r}`);
+  if (cfg.repoPathsUpdated > 0) log(`~/.claude.json githubRepoPaths: ${cfg.repoPathsUpdated} path(s) updated`);
+
+  return summary;
+}
