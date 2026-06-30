@@ -64,7 +64,9 @@ test("rename (prefix mode) moves project dir, rewrites transcripts, re-keys conf
     backup: false,
     rewrite: true,
     force: false,
+    verbose: false,
     log: () => {},
+    warn: () => {},
   });
 
   const destDir = join(fx.projectsRoot, encodeProjectDir(outputDir));
@@ -105,7 +107,9 @@ test("nested state-only (exact mode) rewrites only the cwd identity", () => {
     backup: false,
     rewrite: true,
     force: false,
+    verbose: false,
     log: () => {},
+    warn: () => {},
   });
 
   const destDir = join(fx.projectsRoot, encodeProjectDir(outputDir));
@@ -134,7 +138,9 @@ test("dry-run changes nothing on disk", () => {
     backup: false,
     rewrite: true,
     force: false,
+    verbose: false,
     log: () => {},
+    warn: () => {},
   });
 
   assert.equal(summary.movedProjects.length, 1, "reports planned move");

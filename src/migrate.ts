@@ -8,6 +8,7 @@ import {
   statSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import pc from "picocolors";
 import { backupClaudeJson, backupProjectDir, timestamp } from "./backup.js";
 import { rekeyClaudeJson } from "./config.js";
 import { isInside } from "./files.js";
@@ -23,7 +24,11 @@ export interface MigrateOptions {
   backup: boolean;
   rewrite: boolean;
   force: boolean;
+  verbose: boolean;
+  /** Routine progress detail (only shown when verbose). */
   log: (msg: string) => void;
+  /** Always-shown warnings. */
+  warn: (msg: string) => void;
 }
 
 export interface MigrateSummary {
@@ -92,7 +97,10 @@ function affectedProjects(inputDir: string, mode: RewriteMode): Array<{ dir: str
 
 /** Perform the Claude-state migration (project session dirs, transcripts, config re-keying). */
 export function migrateClaudeState(opts: MigrateOptions): MigrateSummary {
-  const { inputDir, outputDir, mode, dryRun, backup, rewrite, force, log } = opts;
+  const { inputDir, outputDir, mode, dryRun, backup, rewrite, force, verbose, log, warn } = opts;
+  const vlog = (msg: string) => {
+    if (verbose) log(msg);
+  };
   const rewriter = makeRewriter(inputDir, outputDir, mode);
   const summary: MigrateSummary = {
     movedProjects: [],
@@ -103,9 +111,12 @@ export function migrateClaudeState(opts: MigrateOptions): MigrateSummary {
     repoPathsUpdated: 0,
   };
 
+  const arrow = pc.dim("→");
+  const path = (p: string) => pc.cyan(p);
+
   const projects = affectedProjects(inputDir, mode);
   if (projects.length === 0) {
-    log(`No Claude project sessions found for ${inputDir}.`);
+    warn(`No Claude project sessions found for ${inputDir}.`);
   }
 
   const ts = timestamp();
@@ -114,36 +125,35 @@ export function migrateClaudeState(opts: MigrateOptions): MigrateSummary {
     if (newCwd === cwd) continue;
     const dest = projectDirFor(newCwd);
     summary.movedProjects.push({ from: dir, to: dest });
-    log(`project sessions: ${dir} -> ${dest}`);
+    vlog(`${path(dir)} ${arrow} ${path(dest)}`);
 
     if (dryRun) continue;
 
-    if (backup) {
-      const bak = backupProjectDir(dir, ts);
-      log(`  backed up to ${bak}`);
-    }
+    if (backup) vlog(pc.dim(`  backup: ${backupProjectDir(dir, ts)}`));
     const skipped = moveProjectDir(dir, dest, force);
     for (const s of skipped) {
       summary.skippedCollisions.push(`${dest}/${s}`);
-      log(`  WARNING: skipped existing ${s} (use --force to overwrite)`);
+      warn(`skipped existing ${s} (use --force to overwrite)`);
     }
     if (rewrite) {
       const r = rewriteTranscripts(dest, inputDir, outputDir, mode);
       summary.transcriptFiles += r.files;
       summary.transcriptLines += r.changedLines;
-      if (r.files > 0) log(`  rewrote paths in ${r.files} transcript file(s), ${r.changedLines} line(s)`);
+      if (r.files > 0) vlog(pc.dim(`  rewrote ${r.changedLines} line(s) across ${r.files} transcript(s)`));
     }
   }
 
   if (backup && !dryRun) {
     const bak = backupClaudeJson(ts);
-    if (bak) log(`~/.claude.json backed up to ${bak}`);
+    if (bak) vlog(pc.dim(`  backup: ${bak}`));
   }
   const cfg = rekeyClaudeJson(rewriter, dryRun);
   summary.rekeyed = cfg.rekeyed;
   summary.repoPathsUpdated = cfg.repoPathsUpdated;
-  for (const r of cfg.rekeyed) log(`~/.claude.json projects: ${r}`);
-  if (cfg.repoPathsUpdated > 0) log(`~/.claude.json githubRepoPaths: ${cfg.repoPathsUpdated} path(s) updated`);
+  for (const r of cfg.rekeyed) {
+    const [from, to] = r.split(" -> ");
+    vlog(`${path(from)} ${arrow} ${path(to)}`);
+  }
 
   return summary;
 }
