@@ -116,7 +116,8 @@ async function main(): Promise<void> {
 
   const inputDir = resolve(positionals[0]);
   const outputDir = resolve(positionals[1]);
-  const log = (msg: string) => console.log(flags.dryRun ? pc.dim(`[dry-run] ${msg}`) : msg);
+  const vlog = (msg: string) => console.log(`  ${msg}`);
+  const warn = (msg: string) => console.warn(pc.yellow(`! ${msg}`));
 
   if (inputDir === outputDir) fail("input_dir and output_dir are the same path");
   if (exceedsLimit(inputDir) || exceedsLimit(outputDir)) {
@@ -147,11 +148,9 @@ async function main(): Promise<void> {
     ? { action: "state-only", reason: "forced via --state-only", filesMove: false, needsConfirm: false }
     : determineFileStrategy(inputDir, outputDir);
 
-  log(`files: ${strategy.reason}`);
   if (strategy.needsConfirm && !flags.dryRun && !flags.yes && !flags.force) {
-    if (!(await confirm(`${strategy.reason}. Merge ${inputDir} into it?`))) {
-      console.log("Skipping file move; migrating Claude state only.");
-      strategy = { action: "state-only", reason: "user declined merge", filesMove: false, needsConfirm: false };
+    if (!(await confirm(`${pc.cyan(outputDir)} is not empty. Merge ${pc.cyan(inputDir)} into it?`))) {
+      strategy = { action: "state-only", reason: "merge declined", filesMove: false, needsConfirm: false };
     }
   }
 
@@ -161,7 +160,6 @@ async function main(): Promise<void> {
   if (!flags.dryRun && strategy.action !== "state-only") {
     try {
       applyFileStrategy(strategy, inputDir, outputDir, flags.force);
-      log(`files moved (${strategy.action})`);
     } catch (err) {
       fail(`file move failed: ${(err as Error).message}`);
     }
@@ -175,25 +173,46 @@ async function main(): Promise<void> {
     backup: flags.backup,
     rewrite: flags.rewrite,
     force: flags.force,
-    log,
+    verbose: flags.verbose,
+    log: vlog,
+    warn,
   });
 
+  // Tidy summary.
+  const arrow = pc.dim("→");
+  const row = (label: string, value: string) => console.log(`  ${pc.dim(label.padEnd(8))} ${value}`);
+
+  const filesValue =
+    strategy.action === "state-only"
+      ? `${pc.dim("unchanged on disk")} ${pc.dim(`(${strategy.reason})`)}`
+      : strategy.action === "move-rename"
+        ? `${pc.cyan(inputDir)} ${arrow} ${pc.cyan(outputDir)}`
+        : `merged ${arrow} ${pc.cyan(outputDir)}`;
+
+  const sessionsValue =
+    summary.movedProjects.length === 0
+      ? pc.yellow("none found")
+      : `${summary.movedProjects.length} migrated` +
+        (flags.verbose && summary.transcriptLines > 0
+          ? pc.dim(` (${summary.transcriptLines} path line(s) rewritten)`)
+          : "");
+
+  const configParts: string[] = [];
+  if (summary.rekeyed.length > 0) configParts.push(`${summary.rekeyed.length} project re-keyed`);
+  if (summary.repoPathsUpdated > 0) configParts.push(`${summary.repoPathsUpdated} repo path(s) updated`);
+
   console.log();
-  console.log(pc.bold(flags.dryRun ? "Dry run complete. Planned:" : "Done."));
-  console.log(`  project session dirs: ${summary.movedProjects.length}`);
-  console.log(`  ~/.claude.json keys re-keyed: ${summary.rekeyed.length}`);
-  if (summary.repoPathsUpdated > 0) console.log(`  githubRepoPaths updated: ${summary.repoPathsUpdated}`);
-  if (summary.transcriptLines > 0) {
-    console.log(`  transcript lines rewritten: ${summary.transcriptLines} (${summary.transcriptFiles} file(s))`);
-  }
+  console.log(pc.bold(flags.dryRun ? "Dry run — no changes made" : "Done"));
+  row("files", filesValue);
+  row("sessions", sessionsValue);
+  row("config", configParts.length > 0 ? configParts.join(", ") : pc.dim("unchanged"));
   if (summary.skippedCollisions.length > 0) {
-    console.log(pc.yellow(`  collisions skipped: ${summary.skippedCollisions.length} (use --force to overwrite)`));
+    row("skipped", pc.yellow(`${summary.skippedCollisions.length} collision(s) — re-run with --force to overwrite`));
   }
-  if (!flags.dryRun) {
-    console.log();
-    console.log(pc.green("Next:"));
-    console.log(`  cd ${outputDir} && claude --resume`);
-  }
+
+  console.log();
+  console.log(pc.green(flags.dryRun ? "Would resume with:" : "Resume with:"));
+  console.log(`  ${pc.bold(`cd ${outputDir} && claude --resume`)}`);
 }
 
 main().catch((err) => {
