@@ -29,6 +29,17 @@ export function projectDirFor(absolutePath: string): string {
   return join(projectsRoot(), encodeProjectDir(absolutePath));
 }
 
+/**
+ * True for a directory this tool created as a timestamped backup
+ * (`<encoded>.bak-<ts>`). Encoded project names are pure `[A-Za-z0-9-]` with no
+ * dot, so a `.bak-` in the name unambiguously marks a backup. These must be
+ * ignored during enumeration, otherwise a backup gets re-migrated as if it were
+ * a live project and collides with the real one.
+ */
+export function isBackupDir(name: string): boolean {
+  return name.includes(".bak-");
+}
+
 /** Read the authoritative top-level `cwd` from the first parseable line of a jsonl file. */
 function firstRecordCwd(jsonlPath: string): string | undefined {
   try {
@@ -65,6 +76,7 @@ export function findSourceProjectDir(inputDir: string): string | undefined {
   if (!existsSync(root)) return undefined;
 
   for (const entry of readdirSync(root)) {
+    if (isBackupDir(entry)) continue;
     const dir = join(root, entry);
     let isDir = false;
     try {
@@ -94,6 +106,7 @@ export function enumerateProjects(): ProjectEntry[] {
   if (!existsSync(root)) return [];
   const out: ProjectEntry[] = [];
   for (const entry of readdirSync(root)) {
+    if (isBackupDir(entry)) continue;
     const dir = join(root, entry);
     let isDir = false;
     try {

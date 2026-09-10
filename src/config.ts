@@ -30,13 +30,25 @@ export interface ConfigResult {
 /**
  * Re-key path-dependent entries in `~/.claude.json`.
  *
- * `rewrite` maps an old absolute path to its new location (exact or prefix
- * aware, supplied by the caller). Every `projects` key the rewrite changes is
- * moved (merging into any pre-existing destination key, destination wins), and
- * every `githubRepoPaths` checkout path is updated in place. When `dryRun` is
- * set nothing is written; the would-be changes are still reported.
+ * Two rewriters are supplied because the two kinds of entry follow different
+ * destinations when files and session root are split:
+ *
+ * - `rewriteKey` re-keys `projects` entries. A project key is a session
+ *   identity, so it follows the session root (exact `inputDir` -> `sessionRoot`).
+ * - `rewriteRepoPath` updates `githubRepoPaths` checkout paths. Those point at
+ *   the actual files, so they follow the files destination (`inputDir` and
+ *   anything under it -> `filesDest`).
+ *
+ * When the two destinations coincide the rewriters are identical. Every
+ * `projects` key the rewrite changes is moved (merging into any pre-existing
+ * destination key, destination wins). When `dryRun` is set nothing is written;
+ * the would-be changes are still reported.
  */
-export function rekeyClaudeJson(rewrite: (s: string) => string, dryRun: boolean): ConfigResult {
+export function rekeyClaudeJson(
+  rewriteKey: (s: string) => string,
+  rewriteRepoPath: (s: string) => string,
+  dryRun: boolean,
+): ConfigResult {
   const path = claudeJsonPath();
   const result: ConfigResult = { rekeyed: [], repoPathsUpdated: 0 };
   if (!existsSync(path)) return result;
@@ -46,7 +58,7 @@ export function rekeyClaudeJson(rewrite: (s: string) => string, dryRun: boolean)
   if (config.projects) {
     const projects = config.projects;
     for (const oldKey of Object.keys(projects)) {
-      const newKey = rewrite(oldKey);
+      const newKey = rewriteKey(oldKey);
       if (newKey === oldKey) continue;
       result.rekeyed.push(`${oldKey} -> ${newKey}`);
       if (!dryRun) {
@@ -59,7 +71,7 @@ export function rekeyClaudeJson(rewrite: (s: string) => string, dryRun: boolean)
   if (config.githubRepoPaths) {
     for (const [repo, paths] of Object.entries(config.githubRepoPaths)) {
       if (!Array.isArray(paths)) continue;
-      const updated = paths.map((p) => (typeof p === "string" ? rewrite(p) : p));
+      const updated = paths.map((p) => (typeof p === "string" ? rewriteRepoPath(p) : p));
       const changes = updated.filter((p, i) => p !== paths[i]).length;
       if (changes > 0) {
         result.repoPathsUpdated += changes;

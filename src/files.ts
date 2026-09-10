@@ -39,6 +39,26 @@ function isDir(p: string): boolean {
   }
 }
 
+/** Count regular files under `dir` recursively (0 if it does not exist / is unreadable). */
+export function countFiles(dir: string): number {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  let n = 0;
+  for (const entry of entries) {
+    const full = join(dir, entry);
+    try {
+      n += statSync(full).isDirectory() ? countFiles(full) : 1;
+    } catch {
+      // Skip entries we cannot stat.
+    }
+  }
+  return n;
+}
+
 function isEmptyDir(p: string): boolean {
   try {
     return readdirSync(p).length === 0;

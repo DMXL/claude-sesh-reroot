@@ -54,6 +54,18 @@ cd /root/A && claude --resume
 claude-sesh-reroot ~/Work/old-name ~/Work/new-name
 ```
 
+### Example: split the files from the resume location (`--session-root`)
+
+By default you resume from `output_dir`. Sometimes you want the files to land in one place but the session to resume from another, typically a workspace hub whose subdirectory holds the actual checkout. Pass `--session-root` to decouple them: files move to `output_dir` while the session re-keys to `<session-root>`. Historical file references inside the transcripts still resolve into `output_dir`.
+
+```sh
+# files move to ~/hub/repo, but you resume from the hub at ~/hub
+claude-sesh-reroot ~/old/proj ~/hub/repo --session-root ~/hub
+cd ~/hub && claude --resume      # edits land in ~/hub/repo; the hub's own context is in view
+```
+
+Concretely, the session's `cwd` (and its `~/.claude.json` project key) is re-homed to the session root, while every path under the old project directory, and the `githubRepoPaths` checkout entry, follows the files to `output_dir`. `output_dir` does not have to be under the session root; that is just the common layout. Omit `--session-root` and it defaults to `output_dir`, exactly as before.
+
 ## What it does with your files
 
 File handling is auto-detected, with confirmation when anything is ambiguous:
@@ -67,25 +79,47 @@ File handling is auto-detected, with confirmation when anything is ambiguous:
 
 Transcript path rewriting adapts to this: when files actually move, references under `input_dir` are rewritten to `output_dir`; in state-only mode only the exact session `cwd` is updated, so a path like `/root/A/foo` is never mangled into `/root/A/A/foo`.
 
+## Confirmation
+
+Before changing anything, the tool prints a preflight summary and asks you to confirm:
+
+```
+About to re-home Claude sessions:
+  from     /work/src
+  to       /work/ghost-hub
+  files    unchanged on disk (forced via --state-only)
+  sessions 1 transcript(s) in 1 project folder(s)
+  config   1 ~/.claude.json entry
+! resume target does not exist on disk: /work/ghost-hub (you won't be able to 'cd' there until you create it)
+Proceed? [y/N]
+```
+
+The summary counts exactly what will move (files on disk, session transcripts, `~/.claude.json` entries) so a state-only move of an empty folder no longer looks like it did nothing. Warnings are shown for the risky cases: the resume target not existing on disk, merging into a non-empty `output_dir`, an active session still pointing at `input_dir`, or no sessions found at all. Answer anything but `y` and the run aborts with nothing changed. The prompt is skipped by `--dry-run` (which only reports) and bypassed by `-y`/`--yes` or `--force`.
+
 ## Options
 
 | Flag | Effect |
 |---|---|
 | `-n`, `--dry-run` | Show what would happen; change nothing |
 | `-y`, `--yes` | Skip confirmation prompts |
+| `--session-root <dir>` | Resume from `<dir>` instead of `output_dir`; files still move to `output_dir` |
 | `--state-only` | Never move files; migrate Claude state only |
 | `--no-rewrite` | Do not rewrite path strings inside transcripts |
-| `--no-backup` | Skip the timestamped backups |
+| `--no-backup` | Skip the crash-safety backups entirely |
+| `--keep-backups` | Keep backups after a successful run (default: removed on success) |
 | `--force` | Overwrite collisions and proceed past safety checks |
 | `-v`, `--verbose` | Extra logging |
 | `-h`, `--help` | Show help |
 
-By default a timestamped backup of each migrated project directory is written next to it (`<dir>.bak-<timestamp>`), and `~/.claude.json` is copied into `~/.claude/backups/` before any change.
+Before anything changes, each affected project session directory is snapshotted to `~/.claude/backups/projects/<name>.bak-<timestamp>` and `~/.claude.json` to `~/.claude/backups/`. These are a crash safety net, not an archive: on a successful run they are removed, and they are kept only if the migration fails partway (their locations are printed so you can recover) or you pass `--keep-backups`. `--no-backup` skips them entirely. Backups never live in `~/.claude/projects/`, so they never clutter the directory Claude Code scans.
 
 ## Notes and limitations
 
 - Run it **after exiting** the session you want to move. A live session holds its transcript open and rewrites the old location on exit. The tool warns if it detects a session record still pointing at `input_dir`.
+- A project session directory is only claimed when its name is the encoded form of the cwd recorded inside it. Claude Code writes a session's transcript into the directory for its *current* cwd, so a session that started in one folder and was later re-rooted (`/cd`) leaves a transcript whose first record names the old folder while the file itself sits elsewhere. Without that check, migrating the old folder would claim the entire unrelated directory and merge every session in it into the destination.
+- New backups live under `~/.claude/backups/`, never in the projects tree. As a safety measure, any legacy `<dir>.bak-<timestamp>` directory still sitting in `~/.claude/projects/` is skipped when scanning for sessions, so a stray backup is never re-migrated as if it were a live project.
 - The path-to-key encoding Claude Code uses (`path.replace(/[^a-zA-Z0-9]/g, "-")`) is lossy. Paths whose encoded form exceeds 200 characters are unsupported, because Claude's truncation hash cannot be reproduced; the tool refuses unless you pass `--force`.
+- With `--session-root`, a bare reference to the old project directory itself (a string exactly equal to `input_dir`, rather than a path under it) is treated as the session `cwd` and mapped to the session root, not to `output_dir`. This is the right call for the recorded `cwd`, but a transcript line that named the project directory as a plain file path lands at the session root too. Paths strictly under `input_dir` always follow the files to `output_dir`.
 - `~/.claude/plans/*.md` prose paths and global shell snapshots are intentionally not touched.
 - Honors `CLAUDE_CONFIG_DIR` if you have relocated Claude's config directory.
 

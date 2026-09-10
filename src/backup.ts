@@ -1,5 +1,5 @@
-import { cpSync, existsSync, mkdirSync, copyFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { cpSync, existsSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
 import { backupsDir, claudeJsonPath } from "./locate.js";
 
 /** A filesystem-safe timestamp like 2026-07-01T00-42-00-000Z. */
@@ -7,11 +7,32 @@ export function timestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-/** Recursively copy a project directory to a sibling `<dir>.bak-<ts>`. Returns the backup path. */
+/** Where project session backups live: under `~/.claude/backups/`, never in the scanned projects tree. */
+export function projectBackupsDir(): string {
+  return join(backupsDir(), "projects");
+}
+
+/**
+ * Recursively copy a project session directory to
+ * `~/.claude/backups/projects/<name>.bak-<ts>`. Kept out of `~/.claude/projects`
+ * so Claude Code never scans it and migrations never re-enumerate it. Returns
+ * the backup path.
+ */
 export function backupProjectDir(projectDir: string, ts: string): string {
-  const dest = join(dirname(projectDir), `${basename(projectDir)}.bak-${ts}`);
+  const dir = projectBackupsDir();
+  mkdirSync(dir, { recursive: true });
+  const dest = join(dir, `${basename(projectDir)}.bak-${ts}`);
   cpSync(projectDir, dest, { recursive: true });
   return dest;
+}
+
+/** Remove a backup created during this run. Best-effort; never throws. */
+export function removeBackup(path: string): void {
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch {
+    // Best-effort cleanup; a leftover backup is harmless.
+  }
 }
 
 /** Copy `~/.claude.json` into `~/.claude/backups/`. Returns the backup path, or undefined if absent. */

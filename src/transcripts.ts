@@ -6,18 +6,39 @@ export type RewriteMode = "prefix" | "exact";
 /**
  * Build a string transformer that re-homes path references.
  *
- * - `prefix`: used when the files physically moved. Rewrites `inputDir` and any
- *   path strictly under it (`inputDir/...`) onto `outputDir`.
+ * Two destinations are threaded independently:
+ *
+ * - `sessionRoot` is where the session resumes from (`cd <sessionRoot> && claude
+ *   --resume`). The string equal to `inputDir` — the recorded `cwd` / project
+ *   identity — maps here.
+ * - `filesDest` is where the project files physically moved. Any path strictly
+ *   under `inputDir` (`inputDir/...`) maps here.
+ *
+ * When the two coincide (the common case, no `--session-root`), this is the
+ * plain "move A to B" rewrite. When they differ, the session roots at
+ * `sessionRoot` while historical file paths resolve into `filesDest` (typically
+ * a subdirectory of `sessionRoot`).
+ *
+ * The exact-match and strict-prefix branches are mutually exclusive, so the two
+ * mappings never collide on the same string.
+ *
+ * - `prefix`: used when the files physically moved. Rewrites `inputDir` onto
+ *   `sessionRoot` and any path strictly under it (`inputDir/...`) onto `filesDest`.
  * - `exact`: used for state-only migrations (including the nested
  *   `/root` -> `/root/A` case). Rewrites only strings equal to `inputDir`, so
  *   deeper paths that did not move are left untouched and we avoid turning
  *   `/root/A/foo` into `/root/A/A/foo`.
  */
-export function makeRewriter(inputDir: string, outputDir: string, mode: RewriteMode): (s: string) => string {
+export function makeRewriter(
+  inputDir: string,
+  filesDest: string,
+  sessionRoot: string,
+  mode: RewriteMode,
+): (s: string) => string {
   const prefix = inputDir.endsWith("/") ? inputDir : inputDir + "/";
   return (s: string): string => {
-    if (s === inputDir) return outputDir;
-    if (mode === "prefix" && s.startsWith(prefix)) return outputDir + s.slice(inputDir.length);
+    if (s === inputDir) return sessionRoot;
+    if (mode === "prefix" && s.startsWith(prefix)) return filesDest + s.slice(inputDir.length);
     return s;
   };
 }
@@ -85,10 +106,11 @@ export function collectJsonlFiles(dir: string): string[] {
 export function rewriteTranscripts(
   projectDir: string,
   inputDir: string,
-  outputDir: string,
+  filesDest: string,
+  sessionRoot: string,
   mode: RewriteMode,
 ): { files: number; changedLines: number } {
-  const rewrite = makeRewriter(inputDir, outputDir, mode);
+  const rewrite = makeRewriter(inputDir, filesDest, sessionRoot, mode);
   let files = 0;
   let changedLines = 0;
   for (const file of collectJsonlFiles(projectDir)) {
