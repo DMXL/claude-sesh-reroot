@@ -19,8 +19,12 @@ Session-id-keyed state (`file-history/`, `session-env/`) needs no change; it rid
 ```sh
 pnpm install
 pnpm build
-pnpm link --global      # exposes the `claude-sesh-reroot` command
+ln -sf "$PWD/dist/cli.js" ~/.local/bin/claude-sesh-reroot
 ```
+
+`~/.local/bin` is on PATH on this machine, so the symlink is what exposes the `claude-sesh-reroot` command. `pnpm link --global` is the portable equivalent, but it installs into pnpm's global bin directory (`~/.local/share/pnpm/bin`), which is not on PATH here, so the command would stay invisible until `pnpm setup` had run.
+
+Because the symlink points at a build artifact, re-run `pnpm build` after editing `src/` for the change to take effect.
 
 Or run without installing:
 
